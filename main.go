@@ -1,305 +1,382 @@
 package main
 
 import (
-  "fmt"
-  "log"
-  "os"
-  "path/filepath"
-  "regexp"
-  "strings"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 
-  "github.com/AlexGames73/unioffice-free/common"
-  "github.com/AlexGames73/unioffice-free/document"
-  "github.com/AlexGames73/unioffice-free/schema/soo/wml"
+	"github.com/AlexGames73/unioffice-free/color"
+	"github.com/AlexGames73/unioffice-free/common"
+	"github.com/AlexGames73/unioffice-free/document"
+	"github.com/AlexGames73/unioffice-free/measurement"
+	"github.com/AlexGames73/unioffice-free/schema/soo/wml"
 )
 
 func main() {
 
-  // Check if directory is passed as argument
-  if len(os.Args) < 2 {
-    log.Fatal("Please provide a directory path")
-  }
+	// Check if directory is passed as argument
+	if len(os.Args) < 2 {
+		log.Fatal("Please provide a directory path")
+	}
 
-  if len(os.Args) < 3 {
-    log.Fatal("Please provide a base assets path")
-  }
+	if len(os.Args) < 3 {
+		log.Fatal("Please provide a base assets path")
+	}
 
-  // Get the directory path from arguments
-  dir := os.Args[1]
+	// Get the directory path from arguments
+	dir := os.Args[1]
 
-  // Get the base assets path from arguments
-  assets_path := os.Args[2]
+	// Get the base assets path from arguments
+	assets_path := os.Args[2]
 
-  doc := document.New()
-  defer doc.Close()
+	doc := document.New()
+	defer doc.Close()
 
-  // Loop over all files in the directory
-  err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-    if err != nil {
-      log.Printf("Error accessing path %q: %v\n", path, err)
-      return nil // Skip this file and continue
-    }
+	// Loop over all files in the directory
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			log.Printf("Error accessing path %q: %v\n", path, err)
+			return nil // Skip this file and continue
+		}
 
-    if info == nil {
-      log.Printf("Nil info encountered for path %q\n", path)
-      return nil // Skip if info is nil
-    }
+		if info == nil {
+			log.Printf("Nil info encountered for path %q\n", path)
+			return nil // Skip if info is nil
+		}
 
-    // Check if it is a file (not a directory)
-    if !info.IsDir() {
-      log.Println("Processing file:", path)
-      process_file(doc, path, assets_path)
-    }
-    return nil
-  })
+		// Check if it is a file (not a directory)
+		if !info.IsDir() {
+			log.Println("Processing file:", path)
+			process_file(doc, path, assets_path)
+		}
+		return nil
+	})
 
-  if err != nil {
-    log.Fatalf("Error walking the path %q: %v\n", dir, err)
-  }
+	if err != nil {
+		log.Fatalf("Error walking the path %q: %v\n", dir, err)
+	}
 
-  doc.SaveToFile("output.docx")
+	doc.SaveToFile("output.docx")
 }
 
 func process_file(doc *document.Document, path string, assets_path string) {
-  // Read the file
-  data, err := os.ReadFile(path)
-  if err != nil {
-    log.Fatal(err)
-  }
+	// Read the file
+	data, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-  // Tokenize the file
-  tokens := Tokenize(string(data))
-  tokenizer := NewTokenizer(tokens)
+	// Tokenize the file
+	tokens := Tokenize(string(data))
+	tokenizer := NewTokenizer(tokens)
 
-  var current_paragraph document.Paragraph = doc.AddParagraph()
-  // Date is path without extension
-  date := filepath.Base(path)
-  current_paragraph.Properties().SetStyle("Heading1")
-  current_paragraph.AddRun().AddText(date)
-  current_paragraph = doc.AddParagraph()
+	var current_paragraph document.Paragraph = doc.AddParagraph()
+	// Date is path without extension
+	date := filepath.Base(path)
+	current_paragraph.Properties().SetStyle("Heading1")
+	current_paragraph.AddRun().AddText(date)
+	current_paragraph = doc.AddParagraph()
 
-  var current_hyperlink *document.HyperLink = nil
-  for tokenizer.HasNext() {
-    current := tokenizer.Pop()
-    if current == nil {
-      continue
-    }
-    log.Println(current.String())
-    if current.Type == Text {
-      run := current_paragraph.AddRun()
-      run.AddText(current.Value)
-    } else if current.Type == Newline {
-      current_paragraph = doc.AddParagraph()
-    }
+	var current_hyperlink *document.HyperLink = nil
+	for tokenizer.HasNext() {
+		current := tokenizer.Pop()
+		if current == nil {
+			continue
+		}
+		// log.Println(current.String())
 
-    if !tokenizer.HasNext() {
-      continue;
-    }
+		if current.Type == Code {
+			run := current_paragraph.AddRun()
+			run.AddText(current.Value)
+			run.Properties().SetFontFamily("Noto Sans Mono")
+			run.Properties().Bold()
+		} else if current.Type == Newline && tokenizer.Peek().Type == Text {
+			current_paragraph = doc.AddParagraph()
+		} else if current.Type == Heading && tokenizer.Peek().Type == Text {
+			current_paragraph = doc.AddParagraph()
+			current_paragraph.Properties().SetStyle("Heading2")
+			run := current_paragraph.AddRun()
+			run.AddText(tokenizer.Pop().Value)
+			run.Properties().SetBold(true)
+			current_paragraph = doc.AddParagraph()
+		} else if current.Type == Bullet && tokenizer.Peek().Type == Text {
+			run := current_paragraph.AddRun()
+			run.AddText("- " + tokenizer.Pop().Value)
+		} else if current.Type == ImageLinkStart && tokenizer.Peek().Type == Text {
+			file_path := assets_path + "/" + tokenizer.Pop().Value
+			img, err := common.ImageFromFile(file_path)
+			if err != nil {
+				log.Fatal(err)
+			}
+			// Load image from file
+			ref, err := doc.AddImage(img)
+			if err != nil {
+				log.Fatal(err)
+			}
 
-    if current.Type == Newline && tokenizer.Peek().Type == Text {
-      current_paragraph = doc.AddParagraph()
-    } else if current.Type == Bullet && tokenizer.Peek().Type == Text {
-      run := current_paragraph.AddRun()
-      run.AddText("- " + tokenizer.Pop().Value)
-    } else if current.Type == ImageLinkStart && tokenizer.Peek().Type == Text {
-      file_path := assets_path + "/" + tokenizer.Pop().Value
-      tokenizer.Pop()
-      img, err := common.ImageFromFile(file_path)
-      if err != nil {
-        log.Fatal(err)
-      }
-      // Load image from file
-      _, err = doc.AddImage(img)
-      if err != nil {
-        log.Fatal(err)
-      }
-      tokenizer.Pop()
-    } else if current.Type == LinkNameStart && tokenizer.Peek().Type == Text {
-      link := current_paragraph.AddHyperLink()
-      current_hyperlink = &link
-      link.AddRun().AddText(tokenizer.Pop().Value)
-      tokenizer.Pop()
-    } else if current.Type == LinkTargetStart && tokenizer.Peek().Type == Text {
-      if current_hyperlink == nil {
-        current_paragraph.AddRun().AddText(tokenizer.Pop().Value)
-        continue;
-      }
-      current_hyperlink.SetTarget(tokenizer.Pop().Value)
-      tokenizer.Pop()
-    } else if current.Type == Code {
-      run := current_paragraph.AddRun()
-      run.AddText("`" + tokenizer.Pop().Value + "`")
-    }
-  }
+			// Add image to paragraph
+			anchored, err := current_paragraph.AddRun().AddDrawingAnchored(ref)
+			if err != nil {
+				log.Fatal(err)
+			}
 
-  doc.AddParagraph().Properties().AddSection(wml.ST_SectionMarkNextPage)
+			scale := float64(img.Size.Y)/float64(img.Size.X)
+			scaledHeight := measurement.Distance(scale * 5.0) * measurement.Inch
+			anchored.SetSize(5 * measurement.Inch, scaledHeight)
+			anchored.SetHAlignment(wml.WdST_AlignHCenter)
+			anchored.SetOrigin(wml.WdST_RelFromHColumn, wml.WdST_RelFromVParagraph)
+			anchored.SetTextWrapTopAndBottom()
 
-  fmt.Println("File:", path)
+			current_paragraph = doc.AddParagraph()
+
+			tokenizer.Pop()
+		} else if current.Type == LeftBracket && tokenizer.Peek().Type == Text && tokenizer.PeekI(1).Type == RightBracket && tokenizer.PeekI(2).Type == LeftParen {
+			link := current_paragraph.AddHyperLink()
+			current_hyperlink = &link
+			name := tokenizer.Pop()
+			run := link.AddRun()
+			run.AddText(name.Value)
+			run.Properties().SetUnderline(wml.ST_UnderlineSingle, color.Black)
+			run.Properties().SetColor(color.Blue) // Blue
+		} else if current.Type == LeftBracket {
+			run := current_paragraph.AddRun()
+			run.AddText(current.Value)
+		} else if current.Type == LeftParen && tokenizer.Peek().Type == Text {
+			if current_hyperlink == nil {
+				current_paragraph.AddRun().AddText(tokenizer.Pop().Value)
+				continue
+			}
+			target := tokenizer.Pop()
+			current_hyperlink.SetTarget(target.Value)
+			tokenizer.Pop()
+
+			log.Println(target.String())
+		} else if current.Type == Text {
+			run := current_paragraph.AddRun()
+			run.AddText(current.Value)
+		} else if current.Type == Newline {
+			current_paragraph = doc.AddParagraph()
+		}
+	}
+
+	doc.AddParagraph().Properties().AddSection(wml.ST_SectionMarkNextPage)
+
+	fmt.Println("File:", path)
 }
 
 type Tokenizer struct {
-  tokens []Token
-  index  int
+	tokens []Token
+	index  int
 }
 
 // NewTokenizer creates a tokenizer instance with the given tokens
 func NewTokenizer(tokens []Token) *Tokenizer {
-  return &Tokenizer{tokens: tokens, index: 0}
+	return &Tokenizer{tokens: tokens, index: 0}
 }
 
 // HasNext checks if there are more tokens to process
 func (t *Tokenizer) HasNext() bool {
-  return t.index < len(t.tokens)
+	return t.index < len(t.tokens)
 }
 
 func (t *Tokenizer) Println() {
-  for _, token := range t.tokens {
-    log.Println(token.String())
-  }
+	for _, token := range t.tokens {
+		log.Println(token.String())
+	}
 }
 
 func (token *Token) String() string {
-  return fmt.Sprintf("[Type: %s, Value: %s]", token.Type, token.Value)
+	return fmt.Sprintf("[Type: %s, Value: %s]", token.Type, token.Value)
 }
 
 // Peek returns the next token without advancing the index
-func (t *Tokenizer) Peek() *Token {
-  if t.HasNext() {
-    return &t.tokens[t.index]
-  }
-  return nil
+func (t *Tokenizer) Peek() Token {
+	if t.HasNext() {
+		return t.tokens[t.index]
+	}
+	return Token{ Type: "", Value: "" }
+}
+
+func (t *Tokenizer) PeekI(i int) Token {
+	if len(t.tokens) > t.index+i {
+		return t.tokens[t.index+i]
+	}
+	return Token{ Type: "", Value: "" }
 }
 
 // Pop returns the next token and advances the index
 func (t *Tokenizer) Pop() *Token {
-  if t.HasNext() {
-    token := &t.tokens[t.index]
-    t.index++
-    return token
-  }
-  return nil
+	if t.HasNext() {
+		token := &t.tokens[t.index]
+		t.index++
+		return token
+	}
+	return nil
 }
 
 // Define the token types
 
 const (
-  Newline         = "newline"
-  Bullet          = "bullet"
-  ImageLinkStart  = "imagelinkstart"
-  ImageLinkEnd    = "imagelinkend"
-  LinkNameStart   = "linknamestart"
-  LinkNameEnd     = "linknameend"
-  LinkTargetStart = "linktargetstart"
-  LinkTargetEnd   = "linktargetend"
+	Newline        = "newline"
+	Bullet         = "bullet"
+	Heading        = "heading"
+	ImageLinkStart = "imagelinkstart"
+	ImageLinkEnd   = "imagelinkend"
+	LeftBracket    = "leftbracket"
+	RightBracket   = "linknameend"
+	LeftParen      = "linktargetstart"
+	RightParen     = "linktargetend"
 
-  Indent          = "indent"
-  Unindent        = "unindent"
-  LinkMiddle      = "linkmiddle"
+	Indent     = "indent"
+	Unindent   = "unindent"
+	LinkMiddle = "linkmiddle"
 
-  Code            = "code"
-  Text            = "text"
+	Code = "code"
+	Text = "text"
 )
 
 // Token structure
 type Token struct {
-  Type  string
-  Value string
+	Type  string
+	Value string
+}
+
+type Indentation struct {
+	size    int
+	current []rune
+}
+
+func (i *Indentation) Append(r rune) {
+	i.current = append(i.current, r)
+	i.size++
+}
+
+func (i *Indentation) Pop() rune {
+	r := i.current[len(i.current)-1]
+	i.current = i.current[:len(i.current)-1]
+	i.size--
+	return r
+}
+
+func (i *Indentation) IsEmpty() bool {
+	return i.size == 0
+}
+
+func (i *Indentation) Peek() rune {
+	if i.IsEmpty() {
+		return 0
+	}
+	return i.current[len(i.current)-1]
+}
+
+func (i *Indentation) Peek2() rune {
+	if len(i.current) < 2 || i.IsEmpty() {
+		return 0
+	}
+	return i.current[len(i.current)-2]
+}
+
+type Tokens []Token
+
+func (tokens *Tokens) Append(current string, t string, value string, styles Indentation) {
+	text := current[:len(current)-len(value)]
+	tokens.AppendText(text, styles)
+	*tokens = append(*tokens, Token{Type: t, Value: value})
+}
+
+func (tokens *Tokens) AppendText(text string, styles Indentation) {
+	if text != "" {
+		if styles.Peek() == '`' {
+			*tokens = append(*tokens, Token{Type: Code, Value: text})
+			println(tokens.String())
+		} else {
+			*tokens = append(*tokens, Token{Type: Text, Value: text})
+		}
+	}
+}
+
+func (tokens *Tokens) String() string {
+	var str string
+	for _, token := range *tokens {
+		str += token.String()
+	}
+	return str
 }
 
 // Tokenize function
 func Tokenize(input string) []Token {
-  var tokens []Token
-  lines := strings.Split(input, "\n")
+	var tokens Tokens
+	input = strings.TrimRight(input, "\n")
+	lines := strings.Split(input, "\n")
 
-  for _, line := range lines {
-    current := ""
-    indent := ""
-    for _, character := range line {
-      current += string(character)
+	styles := Indentation{size: 0, current: make([]rune, 0)}
+	for _, line := range lines {
+		current := ""
+		indent := Indentation{size: 0, current: make([]rune, 0)}
+		for _, character := range line {
+			current += string(character)
 
-      if current == "[" {
-        tokens = append(tokens, Token{Type: LinkNameStart, Value: current})
-      }
+			if indent.IsEmpty() && current == "-" {
+				tokens.Append(current, Bullet, "-", styles)
+				current = ""
+			}
 
-      if current == "![[" {
-        tokens = append(tokens, Token{Type: ImageLinkStart, Value: current})
-      }
+			if indent.IsEmpty() && current == "#" {
+				tokens.Append(current, Heading, "#", styles)
+				current = ""
+			}
 
-      if current == "]]" {
-        tokens = append(tokens, Token{Type: ImageLinkEnd, Value: current})
-      }
-    }
-    tokens = append(tokens, Token{Type: Newline, Value: current})
-  }
+			if !strings.HasSuffix(current, "![") && !strings.HasSuffix(current, "![[") && strings.HasSuffix(current, "[") {
+				tokens.Append(current, LeftBracket, "[", styles)
+				indent.Append('[')
+				current = ""
+			}
 
-  // Define regex patterns for different token types
-  reBullet := regexp.MustCompile(`(?m)^- `)        // Match bullet points
-  reCode := regexp.MustCompile("`[^`]+`")          // Match code blocks
+			if indent.Peek() == '[' && strings.HasSuffix(current, "](") {
+				text := current[:len(current)-2]
+				tokens = append(tokens, Token{Type: Text, Value: text})
+				tokens = append(tokens, Token{Type: RightBracket, Value: "]"})
+				tokens = append(tokens, Token{Type: LeftParen, Value: "("})
+				indent.Pop()
+				indent.Append('(')
+				current = ""
+			}
 
-  // Match link names [linkname](
-  reLinkName := regexp.MustCompile(`\[[^\]]+\]\(`)
-  // Match link targets ](linktarget)
-  reLinkTarget := regexp.MustCompile(`\]\(.*\)`)
-  // Match image links [[imagelink!]]
-  reImageLink := regexp.MustCompile(`\[\[.*!\]\]`)
+			if indent.Peek() == '(' && strings.HasSuffix(current, ")") {
+				tokens.Append(current, RightParen, ")", styles)
+				indent.Pop()
+				current = ""
+			}
 
-  // Split the input by newlines
-  lines := strings.Split(input, "\n")
+			if strings.HasSuffix(current, "`") {
+				if styles.Peek() == '`' {
+					text := current[:len(current)-1]
+					tokens = append(tokens, Token{Type: Code, Value: text})
+					styles.Pop()
+					current = ""
+				} else {
+					text := current[:len(current)-1]
+					tokens = append(tokens, Token{Type: Text, Value: text})
+					styles.Append('`')
+					current = ""
+				}
+			}
 
-  for _, line := range lines {
-    // Check for bullet points
-    if reBullet.MatchString(line) {
-      tokens = append(tokens, Token{Type: Bullet, Value: "-"})
-      line = reBullet.ReplaceAllString(line, "")
-    }
+			if strings.HasSuffix(current, "![[") {
+				tokens.Append(current, ImageLinkStart, "![[", styles)
+				current = ""
+			}
 
-    // Find code blocks
-    codeMatches := reCode.FindAllString(line, -1)
-    for _, code := range codeMatches {
-      tokens = append(tokens, Token{Type: Code, Value: code})
-      line = strings.Replace(line, code, "", 1) // Remove the code block from line
-    }
+			if strings.HasSuffix(current, "]]") {
+				tokens.Append(current, ImageLinkEnd, "]]", styles)
+				current = ""
+			}
+		}
+		tokens.AppendText(current, styles)
+		tokens = append(tokens, Token{Type: Newline, Value: "newline"})
+	}
 
-    // Find image links
-    imageLinkMatches := reImageLink.FindAllString(line, -1)
-    for _, imageLink := range imageLinkMatches {
-      tokens = append(tokens, Token{Type: ImageLinkStart, Value: "!"})
-      tokens = append(tokens, Token{Type: Text, Value: imageLink[1:len(imageLink)-1]})
-      tokens = append(tokens, Token{Type: ImageLinkEnd, Value: "!"})
-      line = strings.Replace(line, imageLink, "", 1) // Remove the image link from line
-    }
-
-    // Find link names
-    linkNameMatches := reLinkName.FindAllString(line, -1)
-    for _, linkName := range linkNameMatches {
-      tokens = append(tokens, Token{Type: LinkNameStart, Value: "["})
-      tokens = append(tokens, Token{Type: Text, Value: linkName[1:len(linkName)-1]})
-      tokens = append(tokens, Token{Type: LinkNameEnd, Value: "]"})
-      line = strings.Replace(line, linkName, "", 1) // Remove the link name from line
-    }
-
-
-    // Find link targets
-    linkTargetMatches := reLinkTarget.FindAllString(line, -1)
-    for _, linkTarget := range linkTargetMatches {
-      tokens = append(tokens, Token{Type: LinkTargetStart, Value: "("})
-      tokens = append(tokens, Token{Type: Text, Value: linkTarget[1:len(linkTarget)-1]})
-
-      tokens = append(tokens, Token{Type: LinkTargetEnd, Value: ")"})
-      line = strings.Replace(line, linkTarget, "", 1) // Remove the link target from line
-    }
-
-    // Remaining text as a single token (if any)
-
-    if strings.TrimSpace(line) != "" {
-
-      tokens = append(tokens, Token{Type: Text, Value: line})
-
-    }
-
-    // Add newline token
-    tokens = append(tokens, Token{Type: Newline, Value: "\n"})
-  }
-
-  return tokens
+	return tokens
 }
